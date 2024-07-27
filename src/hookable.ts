@@ -9,6 +9,7 @@ import type {
   NestedHooks,
   HookCallback,
   HookKeys,
+  Thenable,
 } from "./types";
 
 type InferCallback<HT, HN extends keyof HT> = HT[HN] extends HookCallback
@@ -121,15 +122,17 @@ export class Hookable<
     name: NameT,
     function_: InferCallback<HooksT, NameT>
   ) {
-    if (this._hooks[name]) {
-      const index = this._hooks[name].indexOf(function_);
+    const hooks = this._hooks[name];
+
+    if (hooks) {
+      const index = hooks.indexOf(function_);
 
       if (index !== -1) {
-        this._hooks[name].splice(index, 1);
+        hooks.splice(index, 1);
       }
 
-      if (this._hooks[name].length === 0) {
-        delete this._hooks[name];
+      if (hooks.length === 0) {
+        this._hooks[name] = undefined;
       }
     }
   }
@@ -141,7 +144,7 @@ export class Hookable<
     this._deprecatedHooks[name] =
       typeof deprecated === "string" ? { to: deprecated } : deprecated;
     const _hooks = this._hooks[name] || [];
-    delete this._hooks[name];
+    this._hooks[name] = undefined;
     for (const hook of _hooks) {
       this.hook(name, hook as any);
     }
@@ -150,7 +153,6 @@ export class Hookable<
   deprecateHooks(
     deprecatedHooks: Partial<Record<HookNameT, DeprecatedHook<HooksT>>>
   ) {
-    Object.assign(this._deprecatedHooks, deprecatedHooks);
     for (const name in deprecatedHooks) {
       this.deprecateHook(name, deprecatedHooks[name] as DeprecatedHook<HooksT>);
     }
@@ -164,11 +166,13 @@ export class Hookable<
     );
 
     return () => {
-      // Splice will ensure that all fns are called once, and free all
-      // unreg functions from memory.
-      for (const unreg of removeFns.splice(0, removeFns.length)) {
+      for (const unreg of removeFns) {
         unreg();
       }
+
+      // Ensures that all fns are called once, and free all
+      // unreg functions from memory.
+      removeFns.length = 0;
     };
   }
 
@@ -181,25 +185,23 @@ export class Hookable<
   }
 
   removeAllHooks() {
-    for (const key in this._hooks) {
-      delete this._hooks[key];
-    }
+    this._hooks = {};
   }
 
   callHook<NameT extends HookNameT>(
     name: NameT,
     ...arguments_: Parameters<InferCallback<HooksT, NameT>>
-  ): Promise<any> {
-    arguments_.unshift(name);
-    return this.callHookWith(serialTaskCaller, name, ...arguments_);
+  ): Thenable<any> {
+    // @ts-expect-error we always inject name
+    return this.callHookWith(serialTaskCaller, name, name, ...arguments_);
   }
 
   callHookParallel<NameT extends HookNameT>(
     name: NameT,
     ...arguments_: Parameters<InferCallback<HooksT, NameT>>
-  ): Promise<any[]> {
-    arguments_.unshift(name);
-    return this.callHookWith(parallelTaskCaller, name, ...arguments_);
+  ): Thenable<any[]> {
+    // @ts-expect-error we always inject name
+    return this.callHookWith(parallelTaskCaller, name, name, ...arguments_);
   }
 
   callHookWith<
@@ -221,7 +223,7 @@ export class Hookable<
       callEachWith(this._before, event);
     }
     const result = caller(
-      name in this._hooks ? [...this._hooks[name]] : [],
+      this._hooks[name] ? [...this._hooks[name]] : [],
       arguments_
     );
     if ((result as any) instanceof Promise) {
